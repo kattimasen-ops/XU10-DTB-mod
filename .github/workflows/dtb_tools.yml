@@ -1,23 +1,34 @@
 name: Decompile DTB
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # Ermöglicht manuelles Starten über den GitHub "Actions"-Tab
 
 jobs:
   decompile:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Install Device Tree Compiler
-        run: sudo apt-get update && sudo apt-get install -y device-tree-compiler
-
-      - name: Decompile DTB
         run: |
-          # Pfad zu deiner DTB-Datei im Repo
-          dtc -I dtb -O dts -o device_tree.dts source_files/original.dtb
-          
-      - name: Upload DTS as Artifact
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler
+
+      - name: Verify and Decompile DTB
+        run: |
+          # Prüfen ob die Datei existiert (verhindert 'No such file' Fehler)
+          if [ -f "rk3326-xu10-linux.dtb" ]; then
+            echo "Datei gefunden, starte Dekompilierung..."
+            dtc -I dtb -O dts -o device_tree.dts rk3326-xu10-linux.dtb
+          else
+            echo "Fehler: rk3326-xu10-linux.dtb nicht im Root gefunden!"
+            exit 1
+          fi
+
+      - name: Upload DTS Artifact
         uses: actions/upload-artifact@v4
         with:
           name: decompiled-dts
