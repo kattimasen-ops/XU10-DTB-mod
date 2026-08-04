@@ -1,4 +1,4 @@
-name: Decompile DTB
+name: Decompile k36 DTB
 
 on:
   push:
@@ -20,11 +20,11 @@ jobs:
       - name: Verify and Decompile DTB
         run: |
           # Prüfen ob die Datei existiert (verhindert 'No such file' Fehler)
-          if [ -f "rk3326-xu10-linux.dtb" ]; then
+          if [ -f "rk3326-r36s-type5-linux.dtb" ]; then
             echo "Datei gefunden, starte Dekompilierung..."
-            dtc -I dtb -O dts -o device_tree.dts rk3326-xu10-linux.dtb
+            dtc -I dtb -O dts -o device_tree.dts rk3326-r36s-type5-linux.dtb
           else
-            echo "Fehler: rk3326-xu10-linux.dtb nicht im Root gefunden!"
+            echo "Fehler: rk3326-r36s-type5-linux.dtb nicht im Root gefunden!"
             exit 1
           fi
 
