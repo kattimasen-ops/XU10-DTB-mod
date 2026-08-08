@@ -1,59 +1,354 @@
-name: Decompile k36 DTB
+```yaml
+name: Extract and Decompile R36S DTB
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: # Ermöglicht manuelles Starten über den GitHub "Actions"-Tab
+    branches: ["main"]
+
+  workflow_dispatch:
 
 jobs:
   decompile:
     runs-on: ubuntu-latest
+
     steps:
+      # ------------------------------------------------------------
+      # Repository
+      # ------------------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Device Tree Compiler
+      # ------------------------------------------------------------
+      # Tools
+      # ------------------------------------------------------------
+      - name: Install Device Tree Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y device-tree-compiler
+          sudo apt-get install -y \
+            device-tree-compiler \
+            file \
+            xxd \
+            binutils
 
-      - name: Verify and Decompile DTB
+          echo "=== dtc Version ==="
+          dtc --version
+
+      # ------------------------------------------------------------
+      # Find DTB
+      # ------------------------------------------------------------
+      - name: Locate DTB
+        shell: bash
         run: |
-          # Prüfen ob die Datei existiert (verhindert 'No such file' Fehler)
-          if [ -f "rk3326-r36s-type5-linux.dtb" ]; then
-            echo "Datei gefunden, starte Dekompilierung..."
-            dtc -I dtb -O dts -o device_tree.dts rk3326-r36s-type5-linux.dtb
-          else
-            echo "Fehler: rk3326-r36s-type5-linux.dtb nicht im Root gefunden!"
+          set -e
+
+          DTB="rk3326-r36s-type5-linux.dtb"
+
+          if [ ! -f "$DTB" ]; then
+            echo "FEHLER: $DTB wurde nicht gefunden."
+            echo
+            echo "Vorhandene DTB-Dateien:"
+            find . -type f \( -name "*.dtb" -o -name "*.dtbo" \) -print
             exit 1
           fi
 
-      - name: Diagnose original padding (optional, fuer spaetere Compile-Schritte)
+          echo "DTB gefunden:"
+          ls -lh "$DTB"
+
+          echo
+          echo "Dateityp:"
+          file "$DTB"
+
+      # ------------------------------------------------------------
+      # Validate DTB magic
+      # ------------------------------------------------------------
+      - name: Validate DTB Header
+        shell: bash
         run: |
-          echo "=== Original DTB Groesse ==="
-          ls -la rk3326-r36s-type5-linux.dtb
+          set -e
 
-          echo "=== Header-Felder (totalsize, size_dt_struct, size_dt_strings) ==="
-          # Header ist big-endian uint32 ab Byte 0. Relevante Felder:
-          # Byte  4- 7: totalsize
-          # Byte 36-39: size_dt_struct
-          # Byte 40-43: size_dt_strings
-          python3 -c "
+          python3 <<'PY'
           import struct
-          with open('rk3326-r36s-type5-linux.dtb', 'rb') as f:
-              data = f.read(40)
-          magic, totalsize, off_struct, off_strings, off_mem_rsvmap, version, last_comp_version, boot_cpuid, size_strings, size_struct = struct.unpack('>10I', data)
-          print(f'totalsize        = {totalsize} Bytes')
-          print(f'size_dt_struct   = {size_struct} Bytes')
-          print(f'size_dt_strings  = {size_strings} Bytes')
-          used = off_struct + size_struct  # grobe Untergrenze des tatsaechlich genutzten Bereichs
-          slack = totalsize - used
-          print(f'Geschaetzter Leerraum (Padding) im Original: ~{slack} Bytes')
-          print(f'--> Empfehlung fuer -p Flag beim Compile-Workflow: mindestens {max(slack, 0)} (z.B. auf naechste 0x100-Grenze aufrunden)')
-          "
 
-      - name: Upload DTS Artifact
+          filename = "rk3326-r36s-type5-linux.dtb"
+
+          with open(filename, "rb") as f:
+              data = f.read(48)
+
+          if len(data) < 48:
+              raise SystemExit("DTB ist kleiner als der erwartete Header.")
+
+          values = struct.unpack(">12I", data)
+
+          (
+              magic,
+              totalsize,
+              off_dt_struct,
+              off_dt_strings,
+              off_mem_rsvmap,
+              version,
+              last_comp_version,
+              boot_cpuid_phys,
+              size_dt_strings,
+              size_dt_struct,
+              _,
+              _
+          ) = values
+
+          print(f"Magic             : 0x{magic:08x}")
+          print(f"Total size        : {totalsize} bytes")
+          print(f"DT structure      : offset 0x{off_dt_struct:x}")
+          print(f"DT strings        : offset 0x{off_dt_strings:x}")
+          print(f"Memory reserve map: offset 0x{off_mem_rsvmap:x}")
+          print(f"Version           : {version}")
+          print(f"Last compatible   : {last_comp_version}")
+          print(f"Boot CPU          : {boot_cpuid_phys}")
+          print(f"Strings size      : {size_dt_strings} bytes")
+          print(f"Structure size    : {size_dt_struct} bytes")
+
+          if magic != 0xd00dfeed:
+              raise SystemExit(
+                  f"FEHLER: Ungültige DTB Magic: 0x{magic:08x}"
+              )
+
+          if totalsize > len(open(filename, "rb").read()):
+              raise SystemExit(
+                  "FEHLER: DTB totalsize ist größer als die Datei."
+              )
+
+          print()
+          print("DTB Header ist gültig.")
+          PY
+
+      # ------------------------------------------------------------
+      # Decompile complete device tree
+      # ------------------------------------------------------------
+      - name: Decompile Complete DTB
+        shell: bash
+        run: |
+          set -e
+
+          echo "Starte vollständige DTB-Dekomplilierung..."
+
+          dtc \
+            -I dtb \
+            -O dts \
+            -@ \
+            -o device_tree.dts \
+            rk3326-r36s-type5-linux.dtb
+
+          echo
+          echo "DTS erfolgreich erzeugt:"
+          ls -lh device_tree.dts
+
+          echo
+          echo "Anzahl Zeilen:"
+          wc -l device_tree.dts
+
+          echo
+          echo "=== DTS Anfang ==="
+          head -n 40 device_tree.dts
+
+      # ------------------------------------------------------------
+      # Extract DTB header information
+      # ------------------------------------------------------------
+      - name: Extract DTB Metadata
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p dtb_extract
+
+          cp rk3326-r36s-type5-linux.dtb dtb_extract/
+
+          python3 <<'PY' > dtb_extract/dtb_header.txt
+          import struct
+
+          filename = "rk3326-r36s-type5-linux.dtb"
+
+          with open(filename, "rb") as f:
+              data = f.read(40)
+
+          (
+              magic,
+              totalsize,
+              off_struct,
+              off_strings,
+              off_mem_rsvmap,
+              version,
+              last_comp_version,
+              boot_cpuid,
+              size_strings,
+              size_struct
+          ) = struct.unpack(">10I", data)
+
+          print("=== Device Tree Blob Header ===")
+          print()
+          print(f"Magic              : 0x{magic:08x}")
+          print(f"Total size         : {totalsize} bytes")
+          print(f"Structure offset   : 0x{off_struct:08x}")
+          print(f"Strings offset     : 0x{off_strings:08x}")
+          print(f"Reserve map offset : 0x{off_mem_rsvmap:08x}")
+          print(f"Version            : {version}")
+          print(f"Last compatible    : {last_comp_version}")
+          print(f"Boot CPU           : {boot_cpuid}")
+          print(f"Strings size       : {size_strings} bytes")
+          print(f"Structure size     : {size_struct} bytes")
+
+          print()
+          print("=== Calculated regions ===")
+
+          struct_end = off_struct + size_struct
+          strings_end = off_strings + size_strings
+
+          print(
+              f"Structure : 0x{off_struct:x} - 0x{struct_end:x}"
+          )
+          print(
+              f"Strings   : 0x{off_strings:x} - 0x{strings_end:x}"
+          )
+
+          print()
+          print("=== File size ===")
+
+          import os
+
+          filesize = os.path.getsize(filename)
+
+          print(f"Actual file size : {filesize} bytes")
+          print(f"DTB totalsize    : {totalsize} bytes")
+          print(f"Trailing data    : {filesize - totalsize} bytes")
+          PY
+
+          cat dtb_extract/dtb_header.txt
+
+      # ------------------------------------------------------------
+      # Dump reserve map
+      # ------------------------------------------------------------
+      - name: Extract Memory Reserve Map
+        shell: bash
+        run: |
+          set -e
+
+          python3 <<'PY' > dtb_extract/memory_reserve_map.txt
+          import struct
+
+          filename = "rk3326-r36s-type5-linux.dtb"
+
+          with open(filename, "rb") as f:
+              data = f.read()
+
+          (
+              magic,
+              totalsize,
+              off_struct,
+              off_strings,
+              off_mem_rsvmap,
+              version,
+              last_comp_version,
+              boot_cpuid,
+              size_strings,
+              size_struct
+          ) = struct.unpack(">10I", data[:40])
+
+          print("=== Device Tree Memory Reserve Map ===")
+          print()
+
+          offset = off_mem_rsvmap
+          index = 0
+
+          while offset + 16 <= len(data):
+              address, size = struct.unpack(">QQ", data[offset:offset + 16])
+
+              if address == 0 and size == 0:
+                  break
+
+              print(
+                  f"[{index}] "
+                  f"address=0x{address:016x} "
+                  f"size=0x{size:x} ({size} bytes)"
+              )
+
+              offset += 16
+              index += 1
+
+          if index == 0:
+              print("Keine reservierten Speicherbereiche.")
+          PY
+
+          cat dtb_extract/memory_reserve_map.txt
+
+      # ------------------------------------------------------------
+      # Raw binary / hex dump
+      # ------------------------------------------------------------
+      - name: Create Raw DTB Dump
+        shell: bash
+        run: |
+          set -e
+
+          xxd -g 1 rk3326-r36s-type5-linux.dtb \
+            > dtb_extract/dtb_hex_dump.txt
+
+          strings -a rk3326-r36s-type5-linux.dtb \
+            > dtb_extract/dtb_strings.txt
+
+      # ------------------------------------------------------------
+      # Search interesting hardware nodes
+      # ------------------------------------------------------------
+      - name: Search Hardware Related Nodes
+        shell: bash
+        run: |
+          set +e
+
+          echo "=== Input / GPIO / ADC / Keys / Joystick ==="
+
+          grep -Ein \
+            "gpio|adc|joystick|joy|analog|key|keys|button|input|rk3326|adc-keys|gpio-keys|pinctrl" \
+            device_tree.dts \
+            > dtb_extract/hardware_search.txt
+
+          cat dtb_extract/hardware_search.txt || true
+
+      # ------------------------------------------------------------
+      # Copy decompiled DTS into extraction directory
+      # ------------------------------------------------------------
+      - name: Prepare Extraction Directory
+        shell: bash
+        run: |
+          set -e
+
+          cp device_tree.dts dtb_extract/device_tree.dts
+
+          echo "=== Extracted files ==="
+          find dtb_extract -maxdepth 1 -type f -printf "%f\n" | sort
+
+      # ------------------------------------------------------------
+      # Create ZIP
+      # ------------------------------------------------------------
+      - name: Create Complete DTB Extraction
+        shell: bash
+        run: |
+          set -e
+
+          zip -r \
+            r36s-dtb-extraction.zip \
+            dtb_extract
+
+          echo
+          echo "=== ZIP ==="
+          ls -lh r36s-dtb-extraction.zip
+
+      # ------------------------------------------------------------
+      # Upload everything
+      # ------------------------------------------------------------
+      - name: Upload Complete DTB Extraction
         uses: actions/upload-artifact@v4
         with:
-          name: decompiled-dts
-          path: device_tree.dts
+          name: r36s-complete-dtb-extraction
+          path: |
+            r36s-dtb-extraction.zip
+            device_tree.dts
+            rk3326-r36s-type5-linux.dtb
+            dtb_extract/
+          if-no-files-found: error
+          retention-days: 30
+```
