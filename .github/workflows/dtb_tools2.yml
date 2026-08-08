@@ -1,175 +1,212 @@
-name: R36S DTB Extract and Decompile
+```yaml
+name: R36S DTB Complete Extraction
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
-  decompile:
+  extract-dtb:
+    name: Decompile and Extract R36S DTB
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y device-tree-compiler zip xxd
+          sudo apt-get install -y device-tree-compiler zip xxd file
 
-          echo "DTC version:"
+          echo "========================================"
+          echo "DTC VERSION"
+          echo "========================================"
           dtc --version
 
-      - name: Check DTB
+      - name: Extract and decompile DTB
         run: |
-          set -e
+          set -u
 
+          echo "========================================"
+          echo "R36S DTB EXTRACTION"
+          echo "========================================"
+
+          OUTPUT="r36s_dtb_complete"
           DTB="rk3326-r36s-type5-linux.dtb"
 
-          if [ ! -f "$DTB" ]; then
-            echo "ERROR: $DTB was not found."
-            echo ""
-            echo "DTB files found in repository:"
-            find . -type f -name "*.dtb" -print
-            exit 1
+          rm -rf "$OUTPUT"
+          mkdir -p "$OUTPUT"
+
+          echo ""
+          echo "Searching for DTB..."
+          echo ""
+
+          if [ -f "$DTB" ]; then
+            echo "Found expected DTB:"
+            echo "$DTB"
+          else
+            FOUND="$(find . -type f -name '*.dtb' | head -n 1)"
+
+            if [ -n "$FOUND" ]; then
+              DTB="$FOUND"
+              echo "Expected filename was not found."
+              echo "Using discovered DTB:"
+              echo "$DTB"
+            else
+              echo "ERROR: No DTB file found."
+              echo ""
+              find . -type f | sort
+              exit 1
+            fi
           fi
 
-          echo "DTB found:"
+          echo ""
+          echo "========================================"
+          echo "ORIGINAL DTB"
+          echo "========================================"
+
+          cp "$DTB" "$OUTPUT/original.dtb"
+
           ls -lh "$DTB"
+          file "$DTB"
 
-      - name: Create output directory
-        run: |
-          set -e
+          echo ""
+          echo "========================================"
+          echo "RAW DTB HEXDUMP"
+          echo "========================================"
 
-          rm -rf r36s_dtb_extraction
-          rm -f r36s-complete-dtb-extraction.zip
+          xxd -g 1 "$DTB" > "$OUTPUT/dtb_complete_hex.txt"
 
-          mkdir -p r36s_dtb_extraction
+          echo ""
+          echo "========================================"
+          echo "DTB STRINGS"
+          echo "========================================"
 
-      - name: Copy original DTB
-        run: |
-          set -e
+          strings -a "$DTB" > "$OUTPUT/dtb_strings.txt"
 
-          cp \
-            rk3326-r36s-type5-linux.dtb \
-            r36s_dtb_extraction/rk3326-r36s-type5-linux.original.dtb
+          echo ""
+          echo "========================================"
+          echo "DTB HEADER"
+          echo "========================================"
 
-      - name: Decompile complete DTB
-        run: |
-          set -e
-
-          dtc \
-            -I dtb \
-            -O dts \
-            -@ \
-            -o r36s_dtb_extraction/device_tree.dts \
-            rk3326-r36s-type5-linux.dtb
-
-          echo "Decompilation successful:"
-          ls -lh r36s_dtb_extraction/device_tree.dts
-
-      - name: Create plain DTS
-        run: |
-          set -e
-
-          dtc \
-            -I dtb \
-            -O dts \
-            -o r36s_dtb_extraction/device_tree_plain.dts \
-            rk3326-r36s-type5-linux.dtb
-
-      - name: Extract DTB header
-        run: |
-          set -e
-
-          python3 <<'PY'
+          python3 - "$DTB" "$OUTPUT/dtb_header.txt" <<'PY'
+          import sys
           import struct
           import os
 
-          filename = "rk3326-r36s-type5-linux.dtb"
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-          with open(filename, "rb") as f:
+          with open(dtb, "rb") as f:
               header = f.read(40)
 
           if len(header) != 40:
-              raise SystemExit("Invalid DTB header.")
+              raise SystemExit("DTB header is smaller than 40 bytes")
 
-          (
-              magic,
-              totalsize,
-              off_struct,
-              off_strings,
-              off_mem_rsvmap,
-              version,
-              last_comp_version,
-              boot_cpuid_phys,
-              size_strings,
-              size_struct
-          ) = struct.unpack(">10I", header)
+          values = struct.unpack(">10I", header)
 
-          filesize = os.path.getsize(filename)
+          magic = values[0]
+          totalsize = values[1]
+          off_struct = values[2]
+          off_strings = values[3]
+          off_mem_rsvmap = values[4]
+          version = values[5]
+          last_comp_version = values[6]
+          boot_cpuid_phys = values[7]
+          size_strings = values[8]
+          size_struct = values[9]
 
-          with open(
-              "r36s_dtb_extraction/dtb_header.txt",
-              "w"
-          ) as out:
+          filesize = os.path.getsize(dtb)
 
-              out.write("R36S DTB HEADER\n")
-              out.write("================\n\n")
-              out.write(f"Magic              : 0x{magic:08x}\n")
-              out.write(f"Total size         : {totalsize}\n")
-              out.write(f"Structure offset   : 0x{off_struct:08x}\n")
-              out.write(f"Strings offset     : 0x{off_strings:08x}\n")
-              out.write(f"Reserve map offset : 0x{off_mem_rsvmap:08x}\n")
-              out.write(f"Version            : {version}\n")
-              out.write(f"Last compatible    : {last_comp_version}\n")
-              out.write(f"Boot CPU           : {boot_cpuid_phys}\n")
-              out.write(f"Strings size       : {size_strings}\n")
-              out.write(f"Structure size     : {size_struct}\n")
-              out.write(f"File size          : {filesize}\n")
+          print("DTB HEADER")
+          print("==========")
+          print()
+          print("Magic              :", hex(magic))
+          print("Total size         :", totalsize)
+          print("Structure offset   :", hex(off_struct))
+          print("Strings offset     :", hex(off_strings))
+          print("Reserve map offset :", hex(off_mem_rsvmap))
+          print("Version            :", version)
+          print("Last compatible    :", last_comp_version)
+          print("Boot CPU           :", boot_cpuid_phys)
+          print("Strings size       :", size_strings)
+          print("Structure size     :", size_struct)
+          print("Actual file size   :", filesize)
+
+          with open(output, "w") as f:
+              f.write("DTB HEADER\n")
+              f.write("==========\n\n")
+              f.write(f"Magic              : 0x{magic:08x}\n")
+              f.write(f"Total size         : {totalsize}\n")
+              f.write(f"Structure offset   : 0x{off_struct:08x}\n")
+              f.write(f"Strings offset     : 0x{off_strings:08x}\n")
+              f.write(f"Reserve map offset : 0x{off_mem_rsvmap:08x}\n")
+              f.write(f"Version            : {version}\n")
+              f.write(f"Last compatible    : {last_comp_version}\n")
+              f.write(f"Boot CPU           : {boot_cpuid_phys}\n")
+              f.write(f"Strings size       : {size_strings}\n")
+              f.write(f"Structure size     : {size_struct}\n")
+              f.write(f"Actual file size   : {filesize}\n")
 
           if magic != 0xD00DFEED:
               raise SystemExit(
-                  f"Invalid DTB magic: 0x{magic:08x}"
+                  "Invalid DTB magic: 0x%08x" % magic
               )
-
-          print("Valid DTB.")
           PY
 
-      - name: Extract DTB strings
-        run: |
-          set -e
+          echo ""
+          echo "========================================"
+          echo "DECOMPILING DTB"
+          echo "========================================"
 
-          strings \
-            -a \
-            rk3326-r36s-type5-linux.dtb \
-            > r36s_dtb_extraction/dtb_strings.txt
+          if dtc \
+            -I dtb \
+            -O dts \
+            -o "$OUTPUT/device_tree.dts" \
+            "$DTB"
+          then
+            echo "Standard DTS decompilation successful."
+          else
+            echo "ERROR: Standard DTS decompilation failed."
+            exit 1
+          fi
 
-      - name: Create complete hex dump
-        run: |
-          set -e
+          echo ""
+          echo "Creating DTS with symbols..."
 
-          xxd \
-            -g 1 \
-            rk3326-r36s-type5-linux.dtb \
-            > r36s_dtb_extraction/dtb_complete_hex.txt
+          if dtc \
+            -I dtb \
+            -O dts \
+            -@ \
+            -o "$OUTPUT/device_tree_symbols.dts" \
+            "$DTB"
+          then
+            echo "Symbol DTS created."
+          else
+            echo "Symbol DTS could not be created."
+          fi
 
-      - name: Extract DT structure and strings blocks
-        run: |
-          set -e
+          echo ""
+          echo "========================================"
+          echo "EXTRACTING DTB STRUCTURE"
+          echo "========================================"
 
-          python3 <<'PY'
+          python3 - "$DTB" "$OUTPUT" <<'PY'
+          import sys
           import struct
 
-          filename = "rk3326-r36s-type5-linux.dtb"
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-          with open(filename, "rb") as f:
+          with open(dtb, "rb") as f:
               data = f.read()
 
           if len(data) < 40:
-              raise SystemExit("DTB is too small.")
+              raise SystemExit("DTB is too small")
 
           header = struct.unpack(">10I", data[:40])
 
@@ -182,68 +219,161 @@ jobs:
           strings_end = off_strings + size_strings
 
           if structure_end > len(data):
-              raise SystemExit("Structure block exceeds DTB size.")
+              raise SystemExit("Structure block is outside DTB")
 
           if strings_end > len(data):
-              raise SystemExit("Strings block exceeds DTB size.")
+              raise SystemExit("Strings block is outside DTB")
 
-          with open(
-              "r36s_dtb_extraction/dt_structure.bin",
-              "wb"
-          ) as f:
-              f.write(data[off_struct:structure_end])
+          structure = data[off_struct:structure_end]
+          strings_block = data[off_strings:strings_end]
 
-          with open(
-              "r36s_dtb_extraction/dt_strings.bin",
-              "wb"
-          ) as f:
-              f.write(data[off_strings:strings_end])
+          with open(output + "/dt_structure.bin", "wb") as f:
+              f.write(structure)
 
-          print(f"Structure block: {size_struct} bytes")
-          print(f"Strings block:   {size_strings} bytes")
+          with open(output + "/dt_strings.bin", "wb") as f:
+              f.write(strings_block)
+
+          with open(output + "/dtb_layout.txt", "w") as f:
+              f.write("DTB LAYOUT\n")
+              f.write("==========\n\n")
+              f.write("Structure offset : 0x%08x\n" % off_struct)
+              f.write("Structure size   : %d bytes\n" % size_struct)
+              f.write("Structure end    : 0x%08x\n" % structure_end)
+              f.write("\n")
+              f.write("Strings offset   : 0x%08x\n" % off_strings)
+              f.write("Strings size     : %d bytes\n" % size_strings)
+              f.write("Strings end      : 0x%08x\n" % strings_end)
+              f.write("\n")
+              f.write("DTB file size    : %d bytes\n" % len(data))
+              f.write("DTB total size   : %d bytes\n" % header[1])
+
+          print("Structure:", len(structure), "bytes")
+          print("Strings  :", len(strings_block), "bytes")
           PY
 
-      - name: Hex dump binary blocks
-        run: |
-          set -e
+          xxd -g 1 \
+            "$OUTPUT/dt_structure.bin" \
+            > "$OUTPUT/dt_structure_hex.txt"
 
-          xxd \
-            -g 1 \
-            r36s_dtb_extraction/dt_structure.bin \
-            > r36s_dtb_extraction/dt_structure_hex.txt
+          xxd -g 1 \
+            "$OUTPUT/dt_strings.bin" \
+            > "$OUTPUT/dt_strings_hex.txt"
 
-          xxd \
-            -g 1 \
-            r36s_dtb_extraction/dt_strings.bin \
-            > r36s_dtb_extraction/dt_strings_hex.txt
+          echo ""
+          echo "========================================"
+          echo "HARDWARE ANALYSIS"
+          echo "========================================"
 
-      - name: Analyze DTB padding
-        run: |
-          set -e
+          DTS="$OUTPUT/device_tree.dts"
 
-          python3 <<'PY'
+          grep -Ein \
+            "gpio|pinctrl|gpio-keys|adc|adc-keys|joystick|joy|analog|axis|axes|button|key|input|linux,code|polarity|invert|inverted|active-low|active-high" \
+            "$DTS" \
+            > "$OUTPUT/hardware_search.txt" || true
+
+          grep -Ein \
+            "fn|function|func|menu|hotkey" \
+            "$DTS" \
+            > "$OUTPUT/fn_button_search.txt" || true
+
+          grep -Ein \
+            "joystick|joy|analog|axis|axes|x-axis|y-axis|adc" \
+            "$DTS" \
+            > "$OUTPUT/analog_stick_search.txt" || true
+
+          grep -Ein \
+            "invert|inverted|polarity|active-low|active-high|axis|axes" \
+            "$DTS" \
+            > "$OUTPUT/polarity_axis_search.txt" || true
+
+          grep -Ein \
+            "gpio" \
+            "$DTS" \
+            > "$OUTPUT/all_gpio_entries.txt" || true
+
+          grep -Ein \
+            "adc" \
+            "$DTS" \
+            > "$OUTPUT/all_adc_entries.txt" || true
+
+          grep -Ein \
+            "input|key|button|event" \
+            "$DTS" \
+            > "$OUTPUT/all_input_entries.txt" || true
+
+          grep -Ein \
+            "compatible" \
+            "$DTS" \
+            > "$OUTPUT/all_compatible_entries.txt" || true
+
+          echo ""
+          echo "========================================"
+          echo "MEMORY RESERVE MAP"
+          echo "========================================"
+
+          python3 - "$DTB" "$OUTPUT/memory_reserve_map.txt" <<'PY'
+          import sys
+          import struct
+
+          dtb = sys.argv[1]
+          output = sys.argv[2]
+
+          with open(dtb, "rb") as f:
+              data = f.read()
+
+          header = struct.unpack(">10I", data[:40])
+          offset = header[4]
+
+          with open(output, "w") as out:
+              out.write("MEMORY RESERVE MAP\n")
+              out.write("==================\n\n")
+
+              index = 0
+
+              while offset + 16 <= len(data):
+                  address, size = struct.unpack(
+                      ">QQ",
+                      data[offset:offset + 16]
+                  )
+
+                  if address == 0 and size == 0:
+                      out.write("End of reserve map.\n")
+                      break
+
+                  out.write(
+                      "[%d] address=0x%016x size=0x%016x (%d bytes)\n"
+                      % (index, address, size, size)
+                  )
+
+                  offset += 16
+                  index += 1
+          PY
+
+          echo ""
+          echo "========================================"
+          echo "PADDING ANALYSIS"
+          echo "========================================"
+
+          python3 - "$DTB" "$OUTPUT/padding_analysis.txt" <<'PY'
+          import sys
           import struct
           import os
 
-          filename = "rk3326-r36s-type5-linux.dtb"
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-          with open(filename, "rb") as f:
+          with open(dtb, "rb") as f:
               data = f.read()
 
-          (
-              magic,
-              totalsize,
-              off_struct,
-              off_strings,
-              off_mem_rsvmap,
-              version,
-              last_comp_version,
-              boot_cpuid_phys,
-              size_strings,
-              size_struct
-          ) = struct.unpack(">10I", data[:40])
+          header = struct.unpack(">10I", data[:40])
 
-          filesize = os.path.getsize(filename)
+          totalsize = header[1]
+          off_struct = header[2]
+          off_strings = header[3]
+          size_strings = header[8]
+          size_struct = header[9]
+
+          filesize = os.path.getsize(dtb)
 
           structure_end = off_struct + size_struct
           strings_end = off_strings + size_strings
@@ -252,224 +382,98 @@ jobs:
           padding = totalsize - used_end
           trailing = filesize - totalsize
 
-          with open(
-              "r36s_dtb_extraction/padding_analysis.txt",
-              "w"
-          ) as out:
+          with open(output, "w") as out:
+              out.write("PADDING ANALYSIS\n")
+              out.write("================\n\n")
+              out.write("File size      : %d\n" % filesize)
+              out.write("DTB total size : %d\n" % totalsize)
+              out.write("Structure end  : 0x%x\n" % structure_end)
+              out.write("Strings end    : 0x%x\n" % strings_end)
+              out.write("Used end       : 0x%x\n" % used_end)
+              out.write("DTB padding    : %d bytes\n" % padding)
+              out.write("Trailing data  : %d bytes\n" % trailing)
 
-              out.write("DTB PADDING ANALYSIS\n")
-              out.write("====================\n\n")
-              out.write(f"File size       : {filesize}\n")
-              out.write(f"DTB total size  : {totalsize}\n")
-              out.write(f"Structure end   : 0x{structure_end:x}\n")
-              out.write(f"Strings end     : 0x{strings_end:x}\n")
-              out.write(f"Used end        : 0x{used_end:x}\n")
-              out.write(f"DTB padding     : {padding}\n")
-              out.write(f"Trailing data   : {trailing}\n")
-
-              if padding > 0:
-                  rounded = ((padding + 255) // 256) * 256
-                  out.write(
-                      f"Rounded padding : {rounded}\n"
-                  )
-
-          print(f"DTB padding: {padding} bytes")
-          print(f"Trailing data: {trailing} bytes")
+          print("Padding:", padding)
+          print("Trailing:", trailing)
           PY
 
-      - name: Search hardware information
-        run: |
-          set +e
-
-          grep -Ein \
-            "gpio|adc|joystick|joy|analog|axis|axes|button|key|input|pinctrl|rk3326" \
-            r36s_dtb_extraction/device_tree.dts \
-            > r36s_dtb_extraction/hardware_search.txt
-
-          true
-
-      - name: Search FN button
-        run: |
-          set +e
+          echo ""
+          echo "========================================"
+          echo "CREATING README"
+          echo "========================================"
 
           {
-            echo "===== FN / FUNCTION ====="
-            grep -Ein \
-              "fn|function|func" \
-              r36s_dtb_extraction/device_tree.dts
-
-            echo ""
-            echo "===== GPIO KEYS ====="
-            grep -Ein \
-              "gpio-keys|gpio-key|linux,code|keycode" \
-              r36s_dtb_extraction/device_tree.dts
-
-            echo ""
-            echo "===== ADC KEYS ====="
-            grep -Ein \
-              "adc-keys|io-channels|io-channel" \
-              r36s_dtb_extraction/device_tree.dts
-
-            echo ""
-            echo "===== MENU / HOTKEY ====="
-            grep -Ein \
-              "menu|hotkey" \
-              r36s_dtb_extraction/device_tree.dts
-          } > r36s_dtb_extraction/fn_button_search.txt
-
-          true
-
-      - name: Search analog stick
-        run: |
-          set +e
-
-          {
-            echo "===== JOYSTICK / ANALOG ====="
-            grep -Ein \
-              "joystick|joy|analog|axis|axes|x-axis|y-axis" \
-              r36s_dtb_extraction/device_tree.dts
-
-            echo ""
-            echo "===== ADC ====="
-            grep -Ein \
-              "adc|adc@|adc-" \
-              r36s_dtb_extraction/device_tree.dts
-
-            echo ""
-            echo "===== INPUT ====="
-            grep -Ein \
-              "input|input-device|linux,input" \
-              r36s_dtb_extraction/device_tree.dts
-          } > r36s_dtb_extraction/analog_stick_search.txt
-
-          true
-
-      - name: Search inversion and polarity
-        run: |
-          set +e
-
-          grep -Ein \
-            "invert|inverted|polarity|active-low|active-high|axis|axes" \
-            r36s_dtb_extraction/device_tree.dts \
-            > r36s_dtb_extraction/polarity_and_axis_search.txt
-
-          true
-
-      - name: Extract GPIO entries
-        run: |
-          set +e
-
-          grep -Ein \
-            "gpio" \
-            r36s_dtb_extraction/device_tree.dts \
-            > r36s_dtb_extraction/all_gpio.txt
-
-          true
-
-      - name: Extract ADC entries
-        run: |
-          set +e
-
-          grep -Ein \
-            "adc" \
-            r36s_dtb_extraction/device_tree.dts \
-            > r36s_dtb_extraction/all_adc.txt
-
-          true
-
-      - name: Extract input entries
-        run: |
-          set +e
-
-          grep -Ein \
-            "input|key|button|event" \
-            r36s_dtb_extraction/device_tree.dts \
-            > r36s_dtb_extraction/all_input.txt
-
-          true
-
-      - name: Extract compatible entries
-        run: |
-          set +e
-
-          grep -Ein \
-            "compatible" \
-            r36s_dtb_extraction/device_tree.dts \
-            > r36s_dtb_extraction/compatible.txt
-
-          true
-
-      - name: Create extraction report
-        run: |
-          set -e
-
-          {
-            echo "R36S DTB EXTRACTION"
-            echo "=================="
+            echo "R36S DTB COMPLETE EXTRACTION"
+            echo "============================"
             echo ""
             echo "Original DTB:"
-            ls -lh rk3326-r36s-type5-linux.dtb
+            echo "$DTB"
             echo ""
-            echo "Extracted files:"
-            find r36s_dtb_extraction -type f -printf "%p - %s bytes\n" | sort
+            echo "Generated files:"
+            find "$OUTPUT" -type f -printf "%f - %s bytes\n" | sort
             echo ""
-            echo "Total extraction size:"
-            du -sh r36s_dtb_extraction
-          } > r36s_dtb_extraction/README.txt
+            echo "Total output size:"
+            du -sh "$OUTPUT"
+          } > "$OUTPUT/README.txt"
 
-      - name: Show extracted files
-        run: |
+          echo ""
           echo "========================================"
-          echo "EXTRACTED FILES"
+          echo "EXTRACTION COMPLETE"
           echo "========================================"
 
-          find r36s_dtb_extraction \
-            -type f \
-            -printf "%p (%s bytes)\n" \
-            | sort
+          find "$OUTPUT" -type f -printf "%p (%s bytes)\n" | sort
 
       - name: Create ZIP
         if: always()
         run: |
           set -e
 
-          if [ ! -d "r36s_dtb_extraction" ]; then
-            echo "ERROR: extraction directory does not exist."
+          echo "========================================"
+          echo "CREATING ZIP"
+          echo "========================================"
+
+          if [ ! -d "r36s_dtb_complete" ]; then
+            echo "ERROR: Output directory does not exist."
             exit 1
           fi
 
-          rm -f r36s-complete-dtb-extraction.zip
+          rm -f r36s-dtb-complete.zip
 
-          zip \
-            -r \
-            r36s-complete-dtb-extraction.zip \
-            r36s_dtb_extraction
+          zip -r \
+            r36s-dtb-complete.zip \
+            r36s_dtb_complete
 
           echo ""
           echo "ZIP CREATED:"
-          ls -lh r36s-complete-dtb-extraction.zip
+          ls -lh r36s-dtb-complete.zip
+
+          echo ""
+          echo "ZIP CONTENT:"
+          unzip -l r36s-dtb-complete.zip
 
       - name: Verify ZIP
         if: always()
         run: |
           set -e
 
-          if [ ! -f "r36s-complete-dtb-extraction.zip" ]; then
-            echo "ERROR: ZIP was not created."
+          if [ ! -f "r36s-dtb-complete.zip" ]; then
+            echo "ERROR: ZIP does not exist."
             exit 1
           fi
 
-          unzip -t r36s-complete-dtb-extraction.zip
+          echo "Testing ZIP..."
+
+          unzip -t r36s-dtb-complete.zip
 
           echo ""
-          echo "ZIP verification successful."
+          echo "ZIP TEST SUCCESSFUL."
 
-      - name: Upload ZIP artifact
+      - name: Upload complete DTB artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: R36S-DTB-COMPLETE
-          path: r36s-complete-dtb-extraction.zip
+          path: r36s-dtb-complete.zip
           if-no-files-found: error
           retention-days: 30
 ```
