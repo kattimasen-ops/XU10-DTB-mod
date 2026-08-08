@@ -1,5 +1,5 @@
 
-name: Decompile R36S DTB
+name: Decompile and Extract R36S DTB
 
 on:
   push:
@@ -29,34 +29,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y device-tree-compiler
 
-          echo "========================================"
-          echo "DTC VERSION"
-          echo "========================================"
-
+          echo "DTC Version:"
           dtc --version
 
 
       # ============================================================
-      # 3. Repository prüfen
-      # ============================================================
-      - name: Check Repository
-        run: |
-          echo "========================================"
-          echo "CURRENT DIRECTORY"
-          echo "========================================"
-
-          pwd
-
-          echo
-          echo "========================================"
-          echo "REPOSITORY FILES"
-          echo "========================================"
-
-          find . -maxdepth 4 -type f -print | sort
-
-
-      # ============================================================
-      # 4. DTB prüfen
+      # 3. DTB prüfen
       # ============================================================
       - name: Verify DTB
         run: |
@@ -64,40 +42,44 @@ jobs:
 
           DTB="rk3326-r36s-type5-linux.dtb"
 
-          echo "========================================"
-          echo "CHECK DTB"
-          echo "========================================"
+          echo "Suche nach:"
+          echo "$DTB"
 
-          if [ -f "$DTB" ]; then
-            echo "DTB gefunden:"
-            ls -lh "$DTB"
-          else
-            echo
-            echo "FEHLER:"
-            echo "$DTB wurde nicht gefunden!"
-            echo
-            echo "Gefundene DTB-Dateien:"
-            find . -type f -name "*.dtb" -print
+          if [ ! -f "$DTB" ]; then
+            echo ""
+            echo "FEHLER: DTB nicht gefunden!"
+            echo ""
+            echo "Gefundene DTB Dateien:"
+            find . -type f \( -name "*.dtb" -o -name "*.dtbo" \) -print
             exit 1
           fi
 
+          echo ""
+          echo "DTB gefunden:"
+          ls -lh "$DTB"
+
+          echo ""
+          echo "Dateityp:"
+          file "$DTB"
+
 
       # ============================================================
-      # 5. Extraktionsverzeichnis erstellen
+      # 4. Extraction-Verzeichnis erstellen
       # ============================================================
       - name: Create Extraction Directory
         run: |
           set -e
 
           rm -rf dtb_extraction
+          rm -f r36s-complete-dtb-extraction.zip
 
           mkdir -p dtb_extraction
 
-          echo "Extraktionsverzeichnis erstellt."
+          echo "Extraction directory created."
 
 
       # ============================================================
-      # 6. Original DTB kopieren
+      # 5. Original-DTB sichern
       # ============================================================
       - name: Copy Original DTB
         run: |
@@ -107,14 +89,11 @@ jobs:
             rk3326-r36s-type5-linux.dtb \
             dtb_extraction/rk3326-r36s-type5-linux.original.dtb
 
-          echo "Original-DTB wurde kopiert."
-
-          ls -lh \
-            dtb_extraction/rk3326-r36s-type5-linux.original.dtb
+          echo "Original DTB copied."
 
 
       # ============================================================
-      # 7. DTB Header analysieren
+      # 6. DTB Header analysieren
       # ============================================================
       - name: Analyze DTB Header
         run: |
@@ -125,9 +104,6 @@ jobs:
           import os
 
           filename = "rk3326-r36s-type5-linux.dtb"
-          output = "dtb_extraction/dtb_header.txt"
-
-          filesize = os.path.getsize(filename)
 
           with open(filename, "rb") as f:
               header = f.read(40)
@@ -135,18 +111,20 @@ jobs:
           if len(header) < 40:
               raise SystemExit("DTB Header ist zu kurz.")
 
-          values = struct.unpack(">10I", header)
+          (
+              magic,
+              totalsize,
+              off_dt_struct,
+              off_dt_strings,
+              off_mem_rsvmap,
+              version,
+              last_comp_version,
+              boot_cpuid_phys,
+              size_dt_strings,
+              size_dt_struct
+          ) = struct.unpack(">10I", header)
 
-          magic = values[0]
-          totalsize = values[1]
-          off_dt_struct = values[2]
-          off_dt_strings = values[3]
-          off_mem_rsvmap = values[4]
-          version = values[5]
-          last_comp_version = values[6]
-          boot_cpuid_phys = values[7]
-          size_dt_strings = values[8]
-          size_dt_struct = values[9]
+          filesize = os.path.getsize(filename)
 
           structure_end = off_dt_struct + size_dt_struct
           strings_end = off_dt_strings + size_dt_strings
@@ -154,82 +132,82 @@ jobs:
           trailing = filesize - totalsize
 
           print("========================================")
-          print("DEVICE TREE BLOB HEADER")
+          print("DTB HEADER")
           print("========================================")
-          print()
-          print(f"File size          : {filesize} bytes")
           print(f"Magic              : 0x{magic:08x}")
-          print(f"Total size         : {totalsize} bytes")
-          print(f"Structure offset   : 0x{off_dt_struct:08x}")
-          print(f"Strings offset     : 0x{off_dt_strings:08x}")
-          print(f"Reserve map offset : 0x{off_mem_rsvmap:08x}")
+          print(f"Total Size         : {totalsize} bytes")
+          print(f"Structure Offset   : 0x{off_dt_struct:08x}")
+          print(f"Strings Offset     : 0x{off_dt_strings:08x}")
+          print(f"Reserve Map Offset : 0x{off_mem_rsvmap:08x}")
           print(f"Version            : {version}")
-          print(f"Last compatible    : {last_comp_version}")
+          print(f"Last Compatible    : {last_comp_version}")
           print(f"Boot CPU           : {boot_cpuid_phys}")
-          print(f"Strings size       : {size_dt_strings} bytes")
-          print(f"Structure size     : {size_dt_struct} bytes")
-          print()
-          print(f"Structure end      : 0x{structure_end:08x}")
-          print(f"Strings end        : 0x{strings_end:08x}")
-          print(f"Trailing data      : {trailing} bytes")
+          print(f"Strings Size       : {size_dt_strings} bytes")
+          print(f"Structure Size     : {size_dt_struct} bytes")
+          print(f"File Size          : {filesize} bytes")
+          print(f"Structure End      : 0x{structure_end:08x}")
+          print(f"Strings End        : 0x{strings_end:08x}")
+          print(f"Trailing Data      : {trailing} bytes")
 
           if magic != 0xd00dfeed:
               raise SystemExit(
                   f"Ungültige DTB Magic: 0x{magic:08x}"
               )
 
-          with open(output, "w") as out:
-              out.write("DEVICE TREE BLOB HEADER\n")
-              out.write("========================\n\n")
-              out.write(f"File size: {filesize} bytes\n")
+          with open(
+              "dtb_extraction/dtb_header.txt",
+              "w"
+          ) as out:
+
+              out.write("DTB HEADER\n")
+              out.write("==========\n\n")
               out.write(f"Magic: 0x{magic:08x}\n")
-              out.write(f"Total size: {totalsize} bytes\n")
+              out.write(f"Total Size: {totalsize}\n")
               out.write(
-                  f"Structure offset: 0x{off_dt_struct:08x}\n"
+                  f"Structure Offset: 0x{off_dt_struct:08x}\n"
               )
               out.write(
-                  f"Strings offset: 0x{off_dt_strings:08x}\n"
+                  f"Strings Offset: 0x{off_dt_strings:08x}\n"
               )
               out.write(
-                  f"Reserve map offset: 0x{off_mem_rsvmap:08x}\n"
+                  f"Reserve Map Offset: 0x{off_mem_rsvmap:08x}\n"
               )
               out.write(f"Version: {version}\n")
               out.write(
-                  f"Last compatible: {last_comp_version}\n"
+                  f"Last Compatible: {last_comp_version}\n"
               )
               out.write(
                   f"Boot CPU: {boot_cpuid_phys}\n"
               )
               out.write(
-                  f"Strings size: {size_dt_strings} bytes\n"
+                  f"Strings Size: {size_dt_strings}\n"
               )
               out.write(
-                  f"Structure size: {size_dt_struct} bytes\n"
+                  f"Structure Size: {size_dt_struct}\n"
+              )
+              out.write(f"File Size: {filesize}\n")
+              out.write(
+                  f"Structure End: 0x{structure_end:08x}\n"
               )
               out.write(
-                  f"Structure end: 0x{structure_end:08x}\n"
+                  f"Strings End: 0x{strings_end:08x}\n"
               )
               out.write(
-                  f"Strings end: 0x{strings_end:08x}\n"
-              )
-              out.write(
-                  f"Trailing data: {trailing} bytes\n"
+                  f"Trailing Data: {trailing}\n"
               )
 
           PY
 
-          echo
-          cat dtb_extraction/dtb_header.txt
-
 
       # ============================================================
-      # 8. Memory Reserve Map extrahieren
+      # 7. Memory Reserve Map
       # ============================================================
       - name: Extract Memory Reserve Map
         run: |
           set -e
 
           python3 <<'PY' > dtb_extraction/memory_reserve_map.txt
+
           import struct
 
           filename = "rk3326-r36s-type5-linux.dtb"
@@ -245,8 +223,7 @@ jobs:
           print("==============================")
           print()
           print(
-              f"Reserve map offset: "
-              f"0x{off_mem_rsvmap:08x}"
+              f"Offset: 0x{off_mem_rsvmap:08x}"
           )
           print()
 
@@ -275,22 +252,22 @@ jobs:
               index += 1
 
           if index == 0:
-              print("Keine reservierten Bereiche gefunden.")
+              print(
+                  "Keine reservierten Bereiche gefunden."
+              )
 
           PY
 
-          cat dtb_extraction/memory_reserve_map.txt
-
 
       # ============================================================
-      # 9. KOMPLETTE DTB DEKOMPILIEREN
+      # 8. KOMPLETTE DTB DEKOMPILIEREN
       # ============================================================
       - name: Decompile Complete DTB
         run: |
           set -e
 
           echo "========================================"
-          echo "DECOMPILING DTB"
+          echo "DECOMPILING COMPLETE DTB"
           echo "========================================"
 
           dtc \
@@ -300,20 +277,20 @@ jobs:
             -o device_tree.dts \
             rk3326-r36s-type5-linux.dtb
 
-          echo
+          echo ""
           echo "Dekomplilierung erfolgreich."
 
-          echo
-          echo "DTS Datei:"
+          echo ""
+          echo "DTS Größe:"
           ls -lh device_tree.dts
 
-          echo
+          echo ""
           echo "DTS Zeilen:"
           wc -l device_tree.dts
 
 
       # ============================================================
-      # 10. DTS speichern
+      # 9. DTS kopieren
       # ============================================================
       - name: Save Decompiled DTS
         run: |
@@ -323,11 +300,9 @@ jobs:
             device_tree.dts \
             dtb_extraction/device_tree.dts
 
-          echo "device_tree.dts gespeichert."
-
 
       # ============================================================
-      # 11. DTS OHNE Symbols erzeugen
+      # 10. Plain DTS
       # ============================================================
       - name: Create Plain DTS
         run: |
@@ -339,11 +314,9 @@ jobs:
             -o dtb_extraction/device_tree_plain.dts \
             rk3326-r36s-type5-linux.dtb
 
-          echo "Plain DTS erzeugt."
-
 
       # ============================================================
-      # 12. DTS MIT Symbols erzeugen
+      # 11. DTS mit Symbols
       # ============================================================
       - name: Create Symbol DTS
         run: |
@@ -356,13 +329,11 @@ jobs:
             -o dtb_extraction/device_tree_symbols.dts \
             rk3326-r36s-type5-linux.dtb
 
-          echo "Symbol DTS erzeugt."
-
 
       # ============================================================
-      # 13. DTB Strings extrahieren
+      # 12. Strings
       # ============================================================
-      - name: Extract Strings
+      - name: Extract DTB Strings
         run: |
           set -e
 
@@ -371,16 +342,11 @@ jobs:
             rk3326-r36s-type5-linux.dtb \
             > dtb_extraction/dtb_strings.txt
 
-          echo "Strings extrahiert."
-
-          wc -l \
-            dtb_extraction/dtb_strings.txt
-
 
       # ============================================================
-      # 14. Vollständiger Hexdump
+      # 13. Kompletter Hexdump
       # ============================================================
-      - name: Create Hex Dump
+      - name: Create Complete Hex Dump
         run: |
           set -e
 
@@ -389,11 +355,9 @@ jobs:
             rk3326-r36s-type5-linux.dtb \
             > dtb_extraction/dtb_complete_hex.txt
 
-          echo "Hexdump erstellt."
-
 
       # ============================================================
-      # 15. DTB Header Hexdump
+      # 14. Header Hexdump
       # ============================================================
       - name: Create Header Hex Dump
         run: |
@@ -405,17 +369,16 @@ jobs:
             rk3326-r36s-type5-linux.dtb \
             > dtb_extraction/dtb_header_hex.txt
 
-          cat dtb_extraction/dtb_header_hex.txt
-
 
       # ============================================================
-      # 16. Structure-Bereich extrahieren
+      # 15. Structure Block extrahieren
       # ============================================================
-      - name: Extract Structure Block
+      - name: Extract DT Structure Block
         run: |
           set -e
 
           python3 <<'PY'
+
           import struct
 
           filename = "rk3326-r36s-type5-linux.dtb"
@@ -449,13 +412,14 @@ jobs:
 
 
       # ============================================================
-      # 17. Strings-Bereich extrahieren
+      # 16. Strings Block extrahieren
       # ============================================================
-      - name: Extract Strings Block
+      - name: Extract DT Strings Block
         run: |
           set -e
 
           python3 <<'PY'
+
           import struct
 
           filename = "rk3326-r36s-type5-linux.dtb"
@@ -489,9 +453,9 @@ jobs:
 
 
       # ============================================================
-      # 18. Structure Hexdump
+      # 17. Structure Hexdump
       # ============================================================
-      - name: Dump Structure Block
+      - name: Dump DT Structure
         run: |
           set -e
 
@@ -500,13 +464,11 @@ jobs:
             dtb_extraction/dt_structure.bin \
             > dtb_extraction/dt_structure_hex.txt
 
-          echo "Structure Hexdump erstellt."
-
 
       # ============================================================
-      # 19. Strings Hexdump
+      # 18. Strings Hexdump
       # ============================================================
-      - name: Dump Strings Block
+      - name: Dump DT Strings
         run: |
           set -e
 
@@ -515,36 +477,30 @@ jobs:
             dtb_extraction/dt_strings.bin \
             > dtb_extraction/dt_strings_hex.txt
 
-          echo "Strings Hexdump erstellt."
-
 
       # ============================================================
-      # 20. Hardware-Suche
+      # 19. Hardware Suche
       # ============================================================
-      - name: Search Hardware
+      - name: Search Hardware Nodes
         run: |
           set +e
 
           echo "HARDWARE SEARCH" \
             > dtb_extraction/hardware_search.txt
 
-          echo "===============" \
-            >> dtb_extraction/hardware_search.txt
-
-          echo "" \
+          echo "================" \
             >> dtb_extraction/hardware_search.txt
 
           grep -Ein \
             "gpio|adc|joystick|joy|analog|key|keys|button|input|pinctrl|rk3326" \
             device_tree.dts \
-            >> dtb_extraction/hardware_search.txt || true
+            >> dtb_extraction/hardware_search.txt
 
-          echo
-          cat dtb_extraction/hardware_search.txt
+          true
 
 
       # ============================================================
-      # 21. FN Button Suche
+      # 20. FN Button Suche
       # ============================================================
       - name: Search FN Button
         run: |
@@ -565,7 +521,7 @@ jobs:
           grep -Ein \
             "fn|function|func|menu|hotkey" \
             device_tree.dts \
-            >> dtb_extraction/fn_button_search.txt || true
+            >> dtb_extraction/fn_button_search.txt
 
           echo "" \
             >> dtb_extraction/fn_button_search.txt
@@ -576,7 +532,7 @@ jobs:
           grep -Ein \
             "gpio-keys|gpio-key|linux,code|keycode" \
             device_tree.dts \
-            >> dtb_extraction/fn_button_search.txt || true
+            >> dtb_extraction/fn_button_search.txt
 
           echo "" \
             >> dtb_extraction/fn_button_search.txt
@@ -587,14 +543,13 @@ jobs:
           grep -Ein \
             "adc-keys|io-channels|io-channel|adc" \
             device_tree.dts \
-            >> dtb_extraction/fn_button_search.txt || true
+            >> dtb_extraction/fn_button_search.txt
 
-          echo
-          cat dtb_extraction/fn_button_search.txt
+          true
 
 
       # ============================================================
-      # 22. Analogstick Suche
+      # 21. Analogstick Suche
       # ============================================================
       - name: Search Analog Stick
         run: |
@@ -609,13 +564,13 @@ jobs:
           echo "" \
             >> dtb_extraction/analog_stick_search.txt
 
-          echo "JOYSTICK / ANALOG:" \
+          echo "JOYSTICK / ANALOG / AXIS:" \
             >> dtb_extraction/analog_stick_search.txt
 
           grep -Ein \
             "joystick|joy|analog|axis|axes|x-axis|y-axis" \
             device_tree.dts \
-            >> dtb_extraction/analog_stick_search.txt || true
+            >> dtb_extraction/analog_stick_search.txt
 
           echo "" \
             >> dtb_extraction/analog_stick_search.txt
@@ -626,7 +581,7 @@ jobs:
           grep -Ein \
             "adc|adc@|adc-" \
             device_tree.dts \
-            >> dtb_extraction/analog_stick_search.txt || true
+            >> dtb_extraction/analog_stick_search.txt
 
           echo "" \
             >> dtb_extraction/analog_stick_search.txt
@@ -637,39 +592,34 @@ jobs:
           grep -Ein \
             "input|input-device|linux,input" \
             device_tree.dts \
-            >> dtb_extraction/analog_stick_search.txt || true
+            >> dtb_extraction/analog_stick_search.txt
 
-          echo
-          cat dtb_extraction/analog_stick_search.txt
+          true
 
 
       # ============================================================
-      # 23. Polarity / Inversion
+      # 22. Polarity / Inversion
       # ============================================================
       - name: Search Polarity And Inversion
         run: |
           set +e
 
-          echo "POLARITY AND INVERSION SEARCH" \
+          echo "POLARITY / INVERSION SEARCH" \
             > dtb_extraction/polarity_search.txt
 
-          echo "=============================" \
-            >> dtb_extraction/polarity_search.txt
-
-          echo "" \
+          echo "============================" \
             >> dtb_extraction/polarity_search.txt
 
           grep -Ein \
             "invert|inverted|polarity|active-low|active-high|axis" \
             device_tree.dts \
-            >> dtb_extraction/polarity_search.txt || true
+            >> dtb_extraction/polarity_search.txt
 
-          echo
-          cat dtb_extraction/polarity_search.txt
+          true
 
 
       # ============================================================
-      # 24. Alle GPIO Einträge
+      # 23. Alle GPIO Einträge
       # ============================================================
       - name: Extract GPIO Entries
         run: |
@@ -678,14 +628,13 @@ jobs:
           grep -Ein \
             "gpio" \
             device_tree.dts \
-            > dtb_extraction/all_gpio_entries.txt || true
+            > dtb_extraction/all_gpio_entries.txt
 
-          echo "GPIO entries:"
-          cat dtb_extraction/all_gpio_entries.txt
+          true
 
 
       # ============================================================
-      # 25. Alle ADC Einträge
+      # 24. Alle ADC Einträge
       # ============================================================
       - name: Extract ADC Entries
         run: |
@@ -694,14 +643,91 @@ jobs:
           grep -Ein \
             "adc" \
             device_tree.dts \
-            > dtb_extraction/all_adc_entries.txt || true
+            > dtb_extraction/all_adc_entries.txt
 
-          echo "ADC entries:"
-          cat dtb_extraction/all_adc_entries.txt
+          true
 
 
       # ============================================================
-      # 26. Alle Input / Key Einträge
+      # 25. Alle Input Einträge
       # ============================================================
       - name: Extract Input Entries
         run: |
+          set +e
+
+          grep -Ein \
+            "input|key|button|event" \
+            device_tree.dts \
+            > dtb_extraction/all_input_entries.txt
+
+          true
+
+
+      # ============================================================
+      # 26. Compatible Devices
+      # ============================================================
+      - name: Extract Compatible Devices
+        run: |
+          set +e
+
+          grep -Ein \
+            "compatible" \
+            device_tree.dts \
+            > dtb_extraction/compatible_devices.txt
+
+          true
+
+
+      # ============================================================
+      # 27. Padding analysieren
+      # ============================================================
+      - name: Analyze DTB Padding
+        run: |
+          set -e
+
+          python3 <<'PY' > dtb_extraction/padding_analysis.txt
+
+          import struct
+          import os
+
+          filename = "rk3326-r36s-type5-linux.dtb"
+
+          with open(filename, "rb") as f:
+              data = f.read()
+
+          header = struct.unpack(">10I", data[:40])
+
+          totalsize = header[1]
+          off_dt_struct = header[2]
+          off_dt_strings = header[3]
+          size_dt_strings = header[8]
+          size_dt_struct = header[9]
+
+          filesize = os.path.getsize(filename)
+
+          structure_end = (
+              off_dt_struct +
+              size_dt_struct
+          )
+
+          strings_end = (
+              off_dt_strings +
+              size_dt_strings
+          )
+
+          used_end = max(
+              structure_end,
+              strings_end
+          )
+
+          padding = totalsize - used_end
+          trailing = filesize - totalsize
+
+          print("DTB PADDING ANALYSIS")
+          print("====================")
+          print()
+          print(f"File size: {filesize} bytes")
+          print(f"DTB totalsize: {totalsize} bytes")
+          print(f"Structure end: 0x{structure_end:x}")
+          print(f"Strings end: 0x{strings_end:x}")
+  
