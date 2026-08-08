@@ -1,104 +1,143 @@
 
-name: Decompile and Extract R36S DTB
+name: R36S DTB - Extract Everything
 
 on:
-  push:
-    branches:
-      - "main"
-
   workflow_dispatch:
 
+  push:
+    branches:
+      - main
+
 jobs:
-  decompile:
+  extract:
+    name: Extract and Decompile DTB
     runs-on: ubuntu-latest
 
     steps:
 
-      # ============================================================
-      # 1. Repository auschecken
-      # ============================================================
-      - name: Checkout Repository
+      # ------------------------------------------------------------
+      # 1. Repository
+      # ------------------------------------------------------------
+      - name: Checkout
         uses: actions/checkout@v4
 
 
-      # ============================================================
-      # 2. Device Tree Compiler installieren
-      # ============================================================
-      - name: Install Device Tree Compiler
+      # ------------------------------------------------------------
+      # 2. DTC installieren
+      # ------------------------------------------------------------
+      - name: Install DTC
         run: |
           sudo apt-get update
           sudo apt-get install -y device-tree-compiler
 
-          echo "DTC Version:"
+          echo "DTC:"
           dtc --version
 
 
-      # ============================================================
-      # 3. DTB prüfen
-      # ============================================================
-      - name: Verify DTB
+      # ------------------------------------------------------------
+      # 3. DTB suchen
+      # ------------------------------------------------------------
+      - name: Find DTB
         run: |
-          set -e
+          echo "Repository:"
+          pwd
 
-          DTB="rk3326-r36s-type5-linux.dtb"
+          echo ""
+          echo "DTB files:"
+          find . -type f -name "*.dtb" -print
 
-          echo "Suche nach:"
-          echo "$DTB"
+          echo ""
 
-          if [ ! -f "$DTB" ]; then
-            echo ""
-            echo "FEHLER: DTB nicht gefunden!"
-            echo ""
-            echo "Gefundene DTB Dateien:"
-            find . -type f \( -name "*.dtb" -o -name "*.dtbo" \) -print
+          if [ ! -f "rk3326-r36s-type5-linux.dtb" ]; then
+            echo "ERROR: rk3326-r36s-type5-linux.dtb not found!"
             exit 1
           fi
 
-          echo ""
-          echo "DTB gefunden:"
-          ls -lh "$DTB"
-
-          echo ""
-          echo "Dateityp:"
-          file "$DTB"
+          echo "DTB FOUND:"
+          ls -lh rk3326-r36s-type5-linux.dtb
 
 
-      # ============================================================
-      # 4. Extraction-Verzeichnis erstellen
-      # ============================================================
-      - name: Create Extraction Directory
+      # ------------------------------------------------------------
+      # 4. Arbeitsordner
+      # ------------------------------------------------------------
+      - name: Create Output Directory
         run: |
-          set -e
+          rm -rf r36s_dtb_extraction
+          mkdir -p r36s_dtb_extraction
 
-          rm -rf dtb_extraction
-          rm -f r36s-complete-dtb-extraction.zip
-
-          mkdir -p dtb_extraction
-
-          echo "Extraction directory created."
+          echo "Output directory created."
 
 
-      # ============================================================
-      # 5. Original-DTB sichern
-      # ============================================================
+      # ------------------------------------------------------------
+      # 5. Original DTB sichern
+      # ------------------------------------------------------------
       - name: Copy Original DTB
         run: |
-          set -e
-
           cp \
             rk3326-r36s-type5-linux.dtb \
-            dtb_extraction/rk3326-r36s-type5-linux.original.dtb
+            r36s_dtb_extraction/rk3326-r36s-type5-linux.dtb
 
           echo "Original DTB copied."
 
 
-      # ============================================================
-      # 6. DTB Header analysieren
-      # ============================================================
-      - name: Analyze DTB Header
+      # ------------------------------------------------------------
+      # 6. KOMPLETTE DTB -> DTS
+      # ------------------------------------------------------------
+      - name: Decompile DTB
         run: |
           set -e
 
+          echo "Decompiling DTB..."
+
+          dtc \
+            -I dtb \
+            -O dts \
+            -@ \
+            -o r36s_dtb_extraction/device_tree.dts \
+            rk3326-r36s-type5-linux.dtb
+
+          echo ""
+          echo "SUCCESS"
+
+          ls -lh \
+            r36s_dtb_extraction/device_tree.dts
+
+          echo ""
+          echo "Lines:"
+          wc -l \
+            r36s_dtb_extraction/device_tree.dts
+
+
+      # ------------------------------------------------------------
+      # 7. Zweite DTS-Version ohne Symbols
+      # ------------------------------------------------------------
+      - name: Create Plain DTS
+        run: |
+          dtc \
+            -I dtb \
+            -O dts \
+            -o r36s_dtb_extraction/device_tree_plain.dts \
+            rk3326-r36s-type5-linux.dtb
+
+
+      # ------------------------------------------------------------
+      # 8. DTS mit Symbols
+      # ------------------------------------------------------------
+      - name: Create DTS With Symbols
+        run: |
+          dtc \
+            -I dtb \
+            -O dts \
+            -@ \
+            -o r36s_dtb_extraction/device_tree_symbols.dts \
+            rk3326-r36s-type5-linux.dtb
+
+
+      # ------------------------------------------------------------
+      # 9. DTB Header
+      # ------------------------------------------------------------
+      - name: Extract DTB Header
+        run: |
           python3 <<'PY'
           import struct
           import os
@@ -106,108 +145,74 @@ jobs:
           filename = "rk3326-r36s-type5-linux.dtb"
 
           with open(filename, "rb") as f:
-              header = f.read(40)
+              data = f.read()
 
-          if len(header) < 40:
-              raise SystemExit("DTB Header ist zu kurz.")
+          header = struct.unpack(">10I", data[:40])
 
-          (
-              magic,
-              totalsize,
-              off_dt_struct,
-              off_dt_strings,
-              off_mem_rsvmap,
-              version,
-              last_comp_version,
-              boot_cpuid_phys,
-              size_dt_strings,
-              size_dt_struct
-          ) = struct.unpack(">10I", header)
+          magic = header[0]
+          totalsize = header[1]
+          off_struct = header[2]
+          off_strings = header[3]
+          off_reserve = header[4]
+          version = header[5]
+          last_version = header[6]
+          boot_cpu = header[7]
+          size_strings = header[8]
+          size_struct = header[9]
 
           filesize = os.path.getsize(filename)
 
-          structure_end = off_dt_struct + size_dt_struct
-          strings_end = off_dt_strings + size_dt_strings
-
-          trailing = filesize - totalsize
-
-          print("========================================")
-          print("DTB HEADER")
-          print("========================================")
-          print(f"Magic              : 0x{magic:08x}")
-          print(f"Total Size         : {totalsize} bytes")
-          print(f"Structure Offset   : 0x{off_dt_struct:08x}")
-          print(f"Strings Offset     : 0x{off_dt_strings:08x}")
-          print(f"Reserve Map Offset : 0x{off_mem_rsvmap:08x}")
-          print(f"Version            : {version}")
-          print(f"Last Compatible    : {last_comp_version}")
-          print(f"Boot CPU           : {boot_cpuid_phys}")
-          print(f"Strings Size       : {size_dt_strings} bytes")
-          print(f"Structure Size     : {size_dt_struct} bytes")
-          print(f"File Size          : {filesize} bytes")
-          print(f"Structure End      : 0x{structure_end:08x}")
-          print(f"Strings End        : 0x{strings_end:08x}")
-          print(f"Trailing Data      : {trailing} bytes")
-
-          if magic != 0xd00dfeed:
-              raise SystemExit(
-                  f"Ungültige DTB Magic: 0x{magic:08x}"
-              )
-
           with open(
-              "dtb_extraction/dtb_header.txt",
+              "r36s_dtb_extraction/dtb_header.txt",
               "w"
-          ) as out:
+          ) as f:
 
-              out.write("DTB HEADER\n")
-              out.write("==========\n\n")
-              out.write(f"Magic: 0x{magic:08x}\n")
-              out.write(f"Total Size: {totalsize}\n")
-              out.write(
-                  f"Structure Offset: 0x{off_dt_struct:08x}\n"
-              )
-              out.write(
-                  f"Strings Offset: 0x{off_dt_strings:08x}\n"
-              )
-              out.write(
-                  f"Reserve Map Offset: 0x{off_mem_rsvmap:08x}\n"
-              )
-              out.write(f"Version: {version}\n")
-              out.write(
-                  f"Last Compatible: {last_comp_version}\n"
-              )
-              out.write(
-                  f"Boot CPU: {boot_cpuid_phys}\n"
-              )
-              out.write(
-                  f"Strings Size: {size_dt_strings}\n"
-              )
-              out.write(
-                  f"Structure Size: {size_dt_struct}\n"
-              )
-              out.write(f"File Size: {filesize}\n")
-              out.write(
-                  f"Structure End: 0x{structure_end:08x}\n"
-              )
-              out.write(
-                  f"Strings End: 0x{strings_end:08x}\n"
-              )
-              out.write(
-                  f"Trailing Data: {trailing}\n"
-              )
+              f.write("R36S DTB HEADER\n")
+              f.write("================\n\n")
+              f.write(f"Magic:              0x{magic:08x}\n")
+              f.write(f"Total size:         {totalsize}\n")
+              f.write(f"Structure offset:   0x{off_struct:08x}\n")
+              f.write(f"Strings offset:     0x{off_strings:08x}\n")
+              f.write(f"Reserve map offset: 0x{off_reserve:08x}\n")
+              f.write(f"Version:            {version}\n")
+              f.write(f"Last version:       {last_version}\n")
+              f.write(f"Boot CPU:           {boot_cpu}\n")
+              f.write(f"Strings size:       {size_strings}\n")
+              f.write(f"Structure size:     {size_struct}\n")
+              f.write(f"File size:          {filesize}\n")
 
+          print("Header extracted.")
           PY
 
 
-      # ============================================================
-      # 7. Memory Reserve Map
-      # ============================================================
-      - name: Extract Memory Reserve Map
+      # ------------------------------------------------------------
+      # 10. Strings
+      # ------------------------------------------------------------
+      - name: Extract Strings
         run: |
-          set -e
+          strings \
+            -a \
+            rk3326-r36s-type5-linux.dtb \
+            > r36s_dtb_extraction/dtb_strings.txt
 
-          python3 <<'PY' > dtb_extraction/memory_reserve_map.txt
 
+      # ------------------------------------------------------------
+      # 11. Vollständiger Hexdump
+      # ------------------------------------------------------------
+      - name: Extract Complete Hex
+        run: |
+          xxd \
+            -g 1 \
+            rk3326-r36s-type5-linux.dtb \
+            > r36s_dtb_extraction/dtb_complete_hex.txt
+
+
+      # ------------------------------------------------------------
+      # 12. Structure + Strings Block
+      # ------------------------------------------------------------
+      - name: Extract DTB Binary Blocks
+        run: |
+          python3 <<'PY'
           import struct
 
           filename = "rk3326-r36s-type5-linux.dtb"
@@ -217,143 +222,303 @@ jobs:
 
           header = struct.unpack(">10I", data[:40])
 
-          off_mem_rsvmap = header[4]
+          off_struct = header[2]
+          off_strings = header[3]
 
-          print("DEVICE TREE MEMORY RESERVE MAP")
-          print("==============================")
-          print()
-          print(
-              f"Offset: 0x{off_mem_rsvmap:08x}"
-          )
-          print()
+          size_strings = header[8]
+          size_struct = header[9]
 
-          offset = off_mem_rsvmap
-          index = 0
+          structure = data[
+              off_struct:
+              off_struct + size_struct
+          ]
 
-          while offset + 16 <= len(data):
+          strings_block = data[
+              off_strings:
+              off_strings + size_strings
+          ]
 
-              address, size = struct.unpack(
-                  ">QQ",
-                  data[offset:offset + 16]
-              )
+          with open(
+              "r36s_dtb_extraction/dt_structure.bin",
+              "wb"
+          ) as f:
+              f.write(structure)
 
-              if address == 0 and size == 0:
-                  print("End of reserve map.")
-                  break
+          with open(
+              "r36s_dtb_extraction/dt_strings.bin",
+              "wb"
+          ) as f:
+              f.write(strings_block)
 
-              print(
-                  f"[{index}] "
-                  f"address=0x{address:016x} "
-                  f"size=0x{size:016x} "
-                  f"({size} bytes)"
-              )
-
-              offset += 16
-              index += 1
-
-          if index == 0:
-              print(
-                  "Keine reservierten Bereiche gefunden."
-              )
-
+          print("Structure:", len(structure), "bytes")
+          print("Strings:", len(strings_block), "bytes")
           PY
 
 
-      # ============================================================
-      # 8. KOMPLETTE DTB DEKOMPILIEREN
-      # ============================================================
-      - name: Decompile Complete DTB
+      # ------------------------------------------------------------
+      # 13. Binary Blocks als Hex
+      # ------------------------------------------------------------
+      - name: Hexdump DTB Blocks
         run: |
-          set -e
-
-          echo "========================================"
-          echo "DECOMPILING COMPLETE DTB"
-          echo "========================================"
-
-          dtc \
-            -I dtb \
-            -O dts \
-            -@ \
-            -o device_tree.dts \
-            rk3326-r36s-type5-linux.dtb
-
-          echo ""
-          echo "Dekomplilierung erfolgreich."
-
-          echo ""
-          echo "DTS Größe:"
-          ls -lh device_tree.dts
-
-          echo ""
-          echo "DTS Zeilen:"
-          wc -l device_tree.dts
-
-
-      # ============================================================
-      # 9. DTS kopieren
-      # ============================================================
-      - name: Save Decompiled DTS
-        run: |
-          set -e
-
-          cp \
-            device_tree.dts \
-            dtb_extraction/device_tree.dts
-
-
-      # ============================================================
-      # 10. Plain DTS
-      # ============================================================
-      - name: Create Plain DTS
-        run: |
-          set -e
-
-          dtc \
-            -I dtb \
-            -O dts \
-            -o dtb_extraction/device_tree_plain.dts \
-            rk3326-r36s-type5-linux.dtb
-
-
-      # ============================================================
-      # 11. DTS mit Symbols
-      # ============================================================
-      - name: Create Symbol DTS
-        run: |
-          set -e
-
-          dtc \
-            -I dtb \
-            -O dts \
-            -@ \
-            -o dtb_extraction/device_tree_symbols.dts \
-            rk3326-r36s-type5-linux.dtb
-
-
-      # ============================================================
-      # 12. Strings
-      # ============================================================
-      - name: Extract DTB Strings
-        run: |
-          set -e
-
-          strings \
-            -a \
-            rk3326-r36s-type5-linux.dtb \
-            > dtb_extraction/dtb_strings.txt
-
-
-      # ============================================================
-      # 13. Kompletter Hexdump
-      # ============================================================
-      - name: Create Complete Hex Dump
-        run: |
-          set -e
+          xxd \
+            -g 1 \
+            r36s_dtb_extraction/dt_structure.bin \
+            > r36s_dtb_extraction/dt_structure_hex.txt
 
           xxd \
             -g 1 \
-            rk3326-r36s-type5-linux.dtb \
-            > dtb_extraction/dtb_complete_hex.txt
+            r36s_dtb_extraction/dt_strings.bin \
+            > r36s_dtb_extraction/dt_strings_hex.txt
+
+
+      # ------------------------------------------------------------
+      # 14. Hardware-Informationen
+      # ------------------------------------------------------------
+      - name: Search Hardware
+        run: |
+          set +e
+
+          grep -Ein \
+            "gpio|adc|joystick|joy|analog|axis|axes|button|key|input|pinctrl|rk3326" \
+            r36s_dtb_extraction/device_tree.dts \
+            > r36s_dtb_extraction/hardware_search.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 15. FN Button
+      # ------------------------------------------------------------
+      - name: Search FN Button
+        run: |
+          set +e
+
+          {
+            echo "===== FN / FUNCTION ====="
+            grep -Ein \
+              "fn|function|func" \
+              r36s_dtb_extraction/device_tree.dts
+
+            echo ""
+            echo "===== GPIO KEYS ====="
+            grep -Ein \
+              "gpio-keys|gpio-key|linux,code|keycode" \
+              r36s_dtb_extraction/device_tree.dts
+
+            echo ""
+            echo "===== ADC KEYS ====="
+            grep -Ein \
+              "adc-keys|io-channels|io-channel" \
+              r36s_dtb_extraction/device_tree.dts
+
+            echo ""
+            echo "===== MENU / HOTKEY ====="
+            grep -Ein \
+              "menu|hotkey" \
+              r36s_dtb_extraction/device_tree.dts
+          } > r36s_dtb_extraction/fn_button_search.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 16. Analogstick
+      # ------------------------------------------------------------
+      - name: Search Analog Stick
+        run: |
+          set +e
+
+          {
+            echo "===== JOYSTICK / ANALOG ====="
+            grep -Ein \
+              "joystick|joy|analog|axis|axes|x-axis|y-axis" \
+              r36s_dtb_extraction/device_tree.dts
+
+            echo ""
+            echo "===== ADC ====="
+            grep -Ein \
+              "adc|adc@|adc-" \
+              r36s_dtb_extraction/device_tree.dts
+
+            echo ""
+            echo "===== INPUT ====="
+            grep -Ein \
+              "input|input-device|linux,input" \
+              r36s_dtb_extraction/device_tree.dts
+          } > r36s_dtb_extraction/analog_stick_search.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 17. Inversion / Polarity
+      # ------------------------------------------------------------
+      - name: Search Axis Inversion
+        run: |
+          set +e
+
+          grep -Ein \
+            "invert|inverted|polarity|active-low|active-high|axis|axes" \
+            r36s_dtb_extraction/device_tree.dts \
+            > r36s_dtb_extraction/polarity_and_axis_search.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 18. GPIO
+      # ------------------------------------------------------------
+      - name: Extract GPIO Information
+        run: |
+          set +e
+
+          grep -Ein \
+            "gpio" \
+            r36s_dtb_extraction/device_tree.dts \
+            > r36s_dtb_extraction/all_gpio.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 19. ADC
+      # ------------------------------------------------------------
+      - name: Extract ADC Information
+        run: |
+          set +e
+
+          grep -Ein \
+            "adc" \
+            r36s_dtb_extraction/device_tree.dts \
+            > r36s_dtb_extraction/all_adc.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 20. Input / Keys
+      # ------------------------------------------------------------
+      - name: Extract Input Information
+        run: |
+          set +e
+
+          grep -Ein \
+            "input|key|button|event" \
+            r36s_dtb_extraction/device_tree.dts \
+            > r36s_dtb_extraction/all_input.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 21. Compatible Devices
+      # ------------------------------------------------------------
+      - name: Extract Compatible Devices
+        run: |
+          set +e
+
+          grep -Ein \
+            "compatible" \
+            r36s_dtb_extraction/device_tree.dts \
+            > r36s_dtb_extraction/compatible.txt
+
+          true
+
+
+      # ------------------------------------------------------------
+      # 22. Gesamte Extraktion anzeigen
+      # ------------------------------------------------------------
+      - name: Show Extraction
+        run: |
+          echo "========================================"
+          echo "ALL EXTRACTED FILES"
+          echo "========================================"
+
+          find r36s_dtb_extraction \
+            -type f \
+            -printf "%p (%s bytes)\n" \
+            | sort
+
+          echo ""
+          echo "TOTAL:"
+          du -sh r36s_dtb_extraction
+
+
+      # ------------------------------------------------------------
+      # 23. ZIP ERSTELLEN
+      #
+      # Dieser Schritt läuft IMMER.
+      # ------------------------------------------------------------
+      - name: Create ZIP
+        if: always()
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "CREATING FINAL ZIP"
+          echo "========================================"
+
+          if [ ! -d "r36s_dtb_extraction" ]; then
+            echo "Output directory does not exist."
+            exit 1
+          fi
+
+          rm -f r36s-complete-dtb-extraction.zip
+
+          zip \
+            -r \
+            r36s-complete-dtb-extraction.zip \
+            r36s_dtb_extraction
+
+          echo ""
+          echo "ZIP CREATED:"
+          ls -lh r36s-complete-dtb-extraction.zip
+
+          echo ""
+          echo "ZIP CONTENT:"
+          unzip -l r36s-complete-dtb-extraction.zip
+
+
+      # ------------------------------------------------------------
+      # 24. ZIP testen
+      # ------------------------------------------------------------
+      - name: Test ZIP
+        if: always()
+        run: |
+          if [ -f "r36s-complete-dtb-extraction.zip" ]; then
+
+            echo "ZIP exists."
+
+            unzip -t \
+              r36s-complete-dtb-extraction.zip
+
+            echo ""
+            echo "ZIP TEST SUCCESS."
+
+          else
+
+            echo "ERROR: ZIP does not exist!"
+            exit 1
+
+          fi
+
+
+      # ------------------------------------------------------------
+      # 25. ARTIFACT HOCHLADEN
+      #
+      # WICHTIG:
+      # Dieser Schritt wird IMMER ausgeführt.
+      # ------------------------------------------------------------
+      - name: Upload ZIP Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: R36S-DTB-COMPLETE
+          path: r36s-complete-dtb-extraction.zip
+          if-no-files-found: error
+          retention-days: 30
+```
+xtraction/dtb_complete_hex.txt
 
 
       # ============================================================
