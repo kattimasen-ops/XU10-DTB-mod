@@ -27,7 +27,6 @@ jobs:
 
       - name: Extract and decompile DTB
         run: |
-          # Aktiviere striktes Error-Handling (bricht bei Fehlern sauber ab)
           set -euo pipefail
           
           echo "========================================"
@@ -48,7 +47,7 @@ jobs:
             echo "Found expected DTB:"
             echo "$DTB"
           else
-            FOUND="$(find . -type f -name '*.dtb' | head -n 1)"
+            FOUND="$(find . -type f -name '*.dtb' | head -n 1 || true)"
             
             if [ -n "$FOUND" ]; then
               DTB="$FOUND"
@@ -91,69 +90,68 @@ jobs:
           echo "DTB HEADER"
           echo "========================================"
           
-          # WICHTIG: Python-Code muss ganz links am Rand anliegen!
-          python3 - "$DTB" "$OUTPUT/dtb_header.txt" <<'PY'
-import sys
-import struct
-import os
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" "$DTB" "$OUTPUT/dtb_header.txt" << 'EOF'
+          import sys
+          import struct
+          import os
 
-dtb = sys.argv[1]
-output = sys.argv[2]
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-with open(dtb, "rb") as f:
-    header = f.read(40)
+          with open(dtb, "rb") as f:
+              header = f.read(40)
 
-if len(header) != 40:
-    raise SystemExit("DTB header is smaller than 40 bytes")
+          if len(header) != 40:
+              raise SystemExit("DTB header is smaller than 40 bytes")
 
-values = struct.unpack(">10I", header)
+          values = struct.unpack(">10I", header)
 
-magic = values[0]
-totalsize = values[1]
-off_struct = values[2]
-off_strings = values[3]
-off_mem_rsvmap = values[4]
-version = values[5]
-last_comp_version = values[6]
-boot_cpuid_phys = values[7]
-size_strings = values[8]
-size_struct = values[9]
+          magic = values[0]
+          totalsize = values[1]
+          off_struct = values[2]
+          off_strings = values[3]
+          off_mem_rsvmap = values[4]
+          version = values[5]
+          last_comp_version = values[6]
+          boot_cpuid_phys = values[7]
+          size_strings = values[8]
+          size_struct = values[9]
 
-filesize = os.path.getsize(dtb)
+          filesize = os.path.getsize(dtb)
 
-print("DTB HEADER")
-print("==========")
-print()
-print("Magic              :", hex(magic))
-print("Total size         :", totalsize)
-print("Structure offset   :", hex(off_struct))
-print("Strings offset     :", hex(off_strings))
-print("Reserve map offset :", hex(off_mem_rsvmap))
-print("Version            :", version)
-print("Last compatible    :", last_comp_version)
-print("Boot CPU           :", boot_cpuid_phys)
-print("Strings size       :", size_strings)
-print("Structure size     :", size_struct)
-print("Actual file size   :", filesize)
+          print("DTB HEADER")
+          print("==========")
+          print()
+          print("Magic              :", hex(magic))
+          print("Total size         :", totalsize)
+          print("Structure offset   :", hex(off_struct))
+          print("Strings offset     :", hex(off_strings))
+          print("Reserve map offset :", hex(off_mem_rsvmap))
+          print("Version            :", version)
+          print("Last compatible    :", last_comp_version)
+          print("Boot CPU           :", boot_cpuid_phys)
+          print("Strings size       :", size_strings)
+          print("Structure size     :", size_struct)
+          print("Actual file size   :", filesize)
 
-with open(output, "w") as f:
-    f.write("DTB HEADER\n")
-    f.write("==========\n\n")
-    f.write(f"Magic              : 0x{magic:08x}\n")
-    f.write(f"Total size         : {totalsize}\n")
-    f.write(f"Structure offset   : 0x{off_struct:08x}\n")
-    f.write(f"Strings offset     : 0x{off_strings:08x}\n")
-    f.write(f"Reserve map offset : 0x{off_mem_rsvmap:08x}\n")
-    f.write(f"Version            : {version}\n")
-    f.write(f"Last compatible    : {last_comp_version}\n")
-    f.write(f"Boot CPU           : {boot_cpuid_phys}\n")
-    f.write(f"Strings size       : {size_strings}\n")
-    f.write(f"Structure size     : {size_struct}\n")
-    f.write(f"Actual file size   : {filesize}\n")
+          with open(output, "w") as f:
+              f.write("DTB HEADER\n")
+              f.write("==========\n\n")
+              f.write(f"Magic              : 0x{magic:08x}\n")
+              f.write(f"Total size         : {totalsize}\n")
+              f.write(f"Structure offset   : 0x{off_struct:08x}\n")
+              f.write(f"Strings offset     : 0x{off_strings:08x}\n")
+              f.write(f"Reserve map offset : 0x{off_mem_rsvmap:08x}\n")
+              f.write(f"Version            : {version}\n")
+              f.write(f"Last compatible    : {last_comp_version}\n")
+              f.write(f"Boot CPU           : {boot_cpuid_phys}\n")
+              f.write(f"Strings size       : {size_strings}\n")
+              f.write(f"Structure size     : {size_struct}\n")
+              f.write(f"Actual file size   : {filesize}\n")
 
-if magic != 0xD00DFEED:
-    raise SystemExit("Invalid DTB magic: 0x%08x" % magic)
-PY
+          if magic != 0xD00DFEED:
+              raise SystemExit("Invalid DTB magic: 0x%08x" % magic)
+          EOF
           
           echo ""
           echo "========================================"
@@ -181,61 +179,61 @@ PY
           echo "EXTRACTING DTB STRUCTURE"
           echo "========================================"
           
-          python3 - "$DTB" "$OUTPUT" <<'PY'
-import sys
-import struct
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" "$DTB" "$OUTPUT" << 'EOF'
+          import sys
+          import struct
 
-dtb = sys.argv[1]
-output = sys.argv[2]
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-with open(dtb, "rb") as f:
-    data = f.read()
+          with open(dtb, "rb") as f:
+              data = f.read()
 
-if len(data) < 40:
-    raise SystemExit("DTB is too small")
+          if len(data) < 40:
+              raise SystemExit("DTB is too small")
 
-header = struct.unpack(">10I", data[:40])
+          header = struct.unpack(">10I", data[:40])
 
-off_struct = header[2]
-off_strings = header[3]
-size_strings = header[8]
-size_struct = header[9]
+          off_struct = header[2]
+          off_strings = header[3]
+          size_strings = header[8]
+          size_struct = header[9]
 
-structure_end = off_struct + size_struct
-strings_end = off_strings + size_strings
+          structure_end = off_struct + size_struct
+          strings_end = off_strings + size_strings
 
-if structure_end > len(data):
-    raise SystemExit("Structure block is outside DTB")
+          if structure_end > len(data):
+              raise SystemExit("Structure block is outside DTB")
 
-if strings_end > len(data):
-    raise SystemExit("Strings block is outside DTB")
+          if strings_end > len(data):
+              raise SystemExit("Strings block is outside DTB")
 
-structure = data[off_struct:structure_end]
-strings_block = data[off_strings:strings_end]
+          structure = data[off_struct:structure_end]
+          strings_block = data[off_strings:strings_end]
 
-with open(output + "/dt_structure.bin", "wb") as f:
-    f.write(structure)
+          with open(output + "/dt_structure.bin", "wb") as f:
+              f.write(structure)
 
-with open(output + "/dt_strings.bin", "wb") as f:
-    f.write(strings_block)
+          with open(output + "/dt_strings.bin", "wb") as f:
+              f.write(strings_block)
 
-with open(output + "/dtb_layout.txt", "w") as f:
-    f.write("DTB LAYOUT\n")
-    f.write("==========\n\n")
-    f.write("Structure offset : 0x%08x\n" % off_struct)
-    f.write("Structure size   : %d bytes\n" % size_struct)
-    f.write("Structure end    : 0x%08x\n" % structure_end)
-    f.write("\n")
-    f.write("Strings offset   : 0x%08x\n" % off_strings)
-    f.write("Strings size     : %d bytes\n" % size_strings)
-    f.write("Strings end      : 0x%08x\n" % strings_end)
-    f.write("\n")
-    f.write("DTB file size    : %d bytes\n" % len(data))
-    f.write("DTB total size   : %d bytes\n" % header[1])
+          with open(output + "/dtb_layout.txt", "w") as f:
+              f.write("DTB LAYOUT\n")
+              f.write("==========\n\n")
+              f.write("Structure offset : 0x%08x\n" % off_struct)
+              f.write("Structure size   : %d bytes\n" % size_struct)
+              f.write("Structure end    : 0x%08x\n" % structure_end)
+              f.write("\n")
+              f.write("Strings offset   : 0x%08x\n" % off_strings)
+              f.write("Strings size     : %d bytes\n" % size_strings)
+              f.write("Strings end      : 0x%08x\n" % strings_end)
+              f.write("\n")
+              f.write("DTB file size    : %d bytes\n" % len(data))
+              f.write("DTB total size   : %d bytes\n" % header[1])
 
-print("Structure:", len(structure), "bytes")
-print("Strings  :", len(strings_block), "bytes")
-PY
+          print("Structure:", len(structure), "bytes")
+          print("Strings  :", len(strings_block), "bytes")
+          EOF
           
           xxd -g 1 "$OUTPUT/dt_structure.bin" > "$OUTPUT/dt_structure_hex.txt"
           xxd -g 1 "$OUTPUT/dt_strings.bin" > "$OUTPUT/dt_strings_hex.txt"
@@ -261,83 +259,83 @@ PY
           echo "MEMORY RESERVE MAP"
           echo "========================================"
           
-          python3 - "$DTB" "$OUTPUT/memory_reserve_map.txt" <<'PY'
-import sys
-import struct
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" "$DTB" "$OUTPUT/memory_reserve_map.txt" << 'EOF'
+          import sys
+          import struct
 
-dtb = sys.argv[1]
-output = sys.argv[2]
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-with open(dtb, "rb") as f:
-    data = f.read()
+          with open(dtb, "rb") as f:
+              data = f.read()
 
-header = struct.unpack(">10I", data[:40])
-offset = header[4]
+          header = struct.unpack(">10I", data[:40])
+          offset = header[4]
 
-with open(output, "w") as out:
-    out.write("MEMORY RESERVE MAP\n")
-    out.write("==================\n\n")
+          with open(output, "w") as out:
+              out.write("MEMORY RESERVE MAP\n")
+              out.write("==================\n\n")
 
-    index = 0
-    while offset + 16 <= len(data):
-        address, size = struct.unpack(">QQ", data[offset:offset + 16])
+              index = 0
+              while offset + 16 <= len(data):
+                  address, size = struct.unpack(">QQ", data[offset:offset + 16])
 
-        if address == 0 and size == 0:
-            out.write("End of reserve map.\n")
-            break
+                  if address == 0 and size == 0:
+                      out.write("End of reserve map.\n")
+                      break
 
-        out.write("[%d] address=0x%016x size=0x%016x (%d bytes)\n" % (index, address, size, size))
-        offset += 16
-        index += 1
-PY
+                  out.write("[%d] address=0x%016x size=0x%016x (%d bytes)\n" % (index, address, size, size))
+                  offset += 16
+                  index += 1
+          EOF
           
           echo ""
           echo "========================================"
           echo "PADDING ANALYSIS"
           echo "========================================"
           
-          python3 - "$DTB" "$OUTPUT/padding_analysis.txt" <<'PY'
-import sys
-import struct
-import os
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" "$DTB" "$OUTPUT/padding_analysis.txt" << 'EOF'
+          import sys
+          import struct
+          import os
 
-dtb = sys.argv[1]
-output = sys.argv[2]
+          dtb = sys.argv[1]
+          output = sys.argv[2]
 
-with open(dtb, "rb") as f:
-    data = f.read()
+          with open(dtb, "rb") as f:
+              data = f.read()
 
-header = struct.unpack(">10I", data[:40])
+          header = struct.unpack(">10I", data[:40])
 
-totalsize = header[1]
-off_struct = header[2]
-off_strings = header[3]
-size_strings = header[8]
-size_struct = header[9]
+          totalsize = header[1]
+          off_struct = header[2]
+          off_strings = header[3]
+          size_strings = header[8]
+          size_struct = header[9]
 
-filesize = os.path.getsize(dtb)
+          filesize = os.path.getsize(dtb)
 
-structure_end = off_struct + size_struct
-strings_end = off_strings + size_strings
-used_end = max(structure_end, strings_end)
+          structure_end = off_struct + size_struct
+          strings_end = off_strings + size_strings
+          used_end = max(structure_end, strings_end)
 
-padding = totalsize - used_end
-trailing = filesize - totalsize
+          padding = totalsize - used_end
+          trailing = filesize - totalsize
 
-with open(output, "w") as out:
-    out.write("PADDING ANALYSIS\n")
-    out.write("================\n\n")
-    out.write("File size      : %d\n" % filesize)
-    out.write("DTB total size : %d\n" % totalsize)
-    out.write("Structure end  : 0x%x\n" % structure_end)
-    out.write("Strings end    : 0x%x\n" % strings_end)
-    out.write("Used end       : 0x%x\n" % used_end)
-    out.write("DTB padding    : %d bytes\n" % padding)
-    out.write("Trailing data  : %d bytes\n" % trailing)
+          with open(output, "w") as out:
+              out.write("PADDING ANALYSIS\n")
+              out.write("================\n\n")
+              out.write("File size      : %d\n" % filesize)
+              out.write("DTB total size : %d\n" % totalsize)
+              out.write("Structure end  : 0x%x\n" % structure_end)
+              out.write("Strings end    : 0x%x\n" % strings_end)
+              out.write("Used end       : 0x%x\n" % used_end)
+              out.write("DTB padding    : %d bytes\n" % padding)
+              out.write("Trailing data  : %d bytes\n" % trailing)
 
-print("Padding:", padding)
-print("Trailing:", trailing)
-PY
+          print("Padding:", padding)
+          print("Trailing:", trailing)
+          EOF
           
           echo ""
           echo "========================================"
