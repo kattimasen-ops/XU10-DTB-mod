@@ -1,4 +1,4 @@
-name: R36S DTB Complete Extraction
+name: rg32tw3ka DTB Complete Extraction
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   extract-dtb:
-    name: Decompile and Extract R36S DTB
+    name: Decompile and Extract rg32tw3ka DTB
     runs-on: ubuntu-latest
 
     steps:
@@ -18,7 +18,7 @@ jobs:
       - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y device-tree-compiler zip xxd file
+          sudo apt-get install -y device-tree-compiler zip xxd file binwalk
           
           echo "========================================"
           echo "DTC VERSION"
@@ -30,11 +30,11 @@ jobs:
           set -euo pipefail
           
           echo "========================================"
-          echo "R36S DTB EXTRACTION"
+          echo "rg32tw3ka DTB EXTRACTION"
           echo "========================================"
           
-          OUTPUT="r36s_dtb_complete"
-          DTB="rk3326-r36s-type5-linux.dtb"
+          OUTPUT="rg32tw3ka_dtb_complete"
+          DTB="rg32tw3ka.dtb"
           
           rm -rf "$OUTPUT"
           mkdir -p "$OUTPUT"
@@ -173,6 +173,20 @@ jobs:
           else
             echo "Symbol DTS could not be created."
           fi
+
+          echo ""
+          echo "========================================"
+          echo "FDTDUMP DUMP"
+          echo "========================================"
+
+          fdtdump "$DTB" > "$OUTPUT/fdtdump_output.txt" 2>/dev/null || echo "fdtdump failed or had warnings."
+
+          echo ""
+          echo "========================================"
+          echo "BINWALK DEEP ANALYSIS"
+          echo "========================================"
+          
+          binwalk -e -C "$OUTPUT/binwalk_extracted" "$DTB" > "$OUTPUT/binwalk_report.txt" || true
           
           echo ""
           echo "========================================"
@@ -343,8 +357,8 @@ jobs:
           echo "========================================"
           
           {
-            echo "R36S DTB COMPLETE EXTRACTION"
-            echo "============================"
+            echo "rg32tw3ka DTB COMPLETE EXTRACTION"
+            echo "================================="
             echo ""
             echo "Original DTB:"
             echo "$DTB"
@@ -372,34 +386,34 @@ jobs:
           echo "CREATING ZIP"
           echo "========================================"
           
-          if [ ! -d "r36s_dtb_complete" ]; then
+          if [ ! -d "rg32tw3ka_dtb_complete" ]; then
             echo "ERROR: Output directory does not exist."
             exit 1
           fi
           
-          rm -f r36s-dtb-complete.zip
-          zip -r r36s-dtb-complete.zip r36s_dtb_complete
+          rm -f rg32tw3ka-dtb-complete.zip
+          zip -r rg32tw3ka-dtb-complete.zip rg32tw3ka_dtb_complete
           
           echo ""
           echo "ZIP CREATED:"
-          ls -lh r36s-dtb-complete.zip
+          ls -lh rg32tw3ka-dtb-complete.zip
           
           echo ""
           echo "ZIP CONTENT:"
-          unzip -l r36s-dtb-complete.zip
+          unzip -l rg32tw3ka-dtb-complete.zip
 
       - name: Verify ZIP
         if: always()
         run: |
           set -euo pipefail
           
-          if [ ! -f "r36s-dtb-complete.zip" ]; then
+          if [ ! -f "rg32tw3ka-dtb-complete.zip" ]; then
             echo "ERROR: ZIP does not exist."
             exit 1
           fi
           
           echo "Testing ZIP..."
-          unzip -t r36s-dtb-complete.zip
+          unzip -t rg32tw3ka-dtb-complete.zip
           
           echo ""
           echo "ZIP TEST SUCCESSFUL."
@@ -408,7 +422,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: R36S-DTB-COMPLETE
-          path: r36s-dtb-complete.zip
+          name: rg32tw3ka-DTB-COMPLETE
+          path: rg32tw3ka-dtb-complete.zip
           if-no-files-found: error
           retention-days: 30
